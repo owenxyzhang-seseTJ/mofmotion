@@ -5,10 +5,20 @@ Structural motion analysis for flexible metal–organic frameworks. Given crysta
 ## Install
 
 ```bash
-python -m pip install -e '.[dev]'
+pip install mofmotion
 ```
 
-Requires Python ≥ 3.11 with numpy, scipy, pymatgen and spglib. Inside iCloud Drive, `.pth` files are hidden and editable installs break; use a regular install instead:
+Requires Python ≥ 3.11 with numpy, scipy, pymatgen and spglib.
+
+For development or the unreleased version:
+
+```bash
+git clone https://github.com/owenxyzhang-seseTJ/mofmotion
+cd mofmotion
+pip install -e '.[dev]'
+```
+
+Inside iCloud Drive, `.pth` files are hidden and editable installs break; install a copy instead:
 
 ```bash
 uv pip install --python .venv/bin/python --no-deps --no-build-isolation --reinstall .
