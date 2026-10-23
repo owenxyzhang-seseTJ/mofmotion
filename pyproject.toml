@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mofmotion"
+version = "0.1.0"
+description = "Structural motion analysis for flexible metal-organic frameworks"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "pymatgen>=2024.7.18", "scipy>=1.11", "spglib>=2.5"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+[project.urls]
+Homepage = "https://github.com/owenxyzhang-seseTJ/mofmotion"
+Repository = "https://github.com/owenxyzhang-seseTJ/mofmotion"
+Issues = "https://github.com/owenxyzhang-seseTJ/mofmotion/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[project.scripts]
+mofmotion = "mofmotion.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+license-files = ["LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+extend-exclude = ["build", "dist"]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
