@@ -136,7 +136,7 @@ def _pairing(fa, fb, lattice, groups, cutoff):
     cost, parts = 0.0, []
     for ia, ib in groups:
         ra, rb, d, t = _assign(fa[ia], fb[ib], lattice, cutoff)
-        cost += d.sum() + cutoff * (len(ia) + len(ib) - 2 * len(d)) / 2
+        cost += d.sum() + cutoff * (len(ia) + len(ib) - 2 * len(d))
         parts.append((ia[ra], ib[rb], d, t))
     a, b, d, t = (np.concatenate(x) for x in zip(*parts, strict=True)) if parts else ([],) * 4
     return cost, np.asarray(a, dtype=int), np.asarray(b, dtype=int), np.asarray(d), t
@@ -160,6 +160,9 @@ def match(a, b, *, free_a=None, free_b=None, cutoff: float = CUTOFF) -> Match:
     free_a = np.zeros(len(a), bool) if free_a is None else np.asarray(free_a, bool)
     free_b = np.zeros(len(b), bool) if free_b is None else np.asarray(free_b, bool)
     keys = sorted(set(zip(sym_a, free_a, strict=True)) & set(zip(sym_b, free_b, strict=True)))
+    heavy = [k for k in keys if not k[1] and k[0] != "H"]
+    if not heavy:
+        raise ValueError("两个状态没有可配对的骨架重原子，检查键图或审计报告")
     ka, kb = _ratio(sym_a, free_a, sym_b, free_b, keys)
     if ka > 1:
         cells = [(h, _EYE) for h in _supercells(ka)]
@@ -198,9 +201,9 @@ def match(a, b, *, free_a=None, free_b=None, cutoff: float = CUTOFF) -> Match:
     la, fa = sa.lattice.matrix, sa.frac_coords
     fb = fb + origin
     _, pa, pb, d, target = _pairing(fa, fb, la, _groups(sya, fra, syb, frb, False), cutoff)
-    bound = sum(min(len(ia), len(ib)) for ia, ib in _groups(sya, fra, syb, frb, True))
-    matched = np.count_nonzero(~fra[pa] & (sya[pa] != "H"))
-    coverage = matched / bound if bound else 0.0
+    pairs = _groups(sya, fra, syb, frb, True) or _groups(sya, fra, syb, frb, False)
+    bound = sum(min(len(ia), len(ib)) for ia, ib in pairs)
+    coverage = np.count_nonzero(~fra[pa] & (sya[pa] != "H")) / bound if bound else 0.0
 
     rotation, stretch = polar(np.linalg.inv(la) @ t @ sb.lattice.matrix, side="left")
     mapped = Structure(
