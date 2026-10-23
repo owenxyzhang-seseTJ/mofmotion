@@ -4,7 +4,17 @@ from html import escape
 
 import numpy as np
 
-from mofmotion.compare import _BOND, _EVENT, _GATE, _MODES, LABELS, Comparison, _direction, _groups
+from mofmotion.compare import (
+    _BOND,
+    _EVENT,
+    _GATE,
+    _MODES,
+    LABELS,
+    Comparison,
+    _direction,
+    _groups,
+    _matching,
+)
 
 _CSS = """
 body{font:14px/1.5 -apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif;color:#222;
@@ -13,7 +23,7 @@ h1{font-size:1.5em}h2{margin-top:2em;border-bottom:2px solid #444}h3{margin:1.2e
 table{border-collapse:collapse;margin:.3em 0;font-variant-numeric:tabular-nums}
 th,td{border:1px solid #ccc;padding:.25em .6em;text-align:left;vertical-align:top}
 th{background:#f2f2f2}.tag{display:inline-block;background:#e8eef7;border-radius:3px;
-padding:0 .5em;margin:0 .3em .3em 0}.note{color:#666}
+padding:0 .5em;margin:0 .3em .3em 0}.note{color:#666}.warn{color:#b00;font-weight:bold}
 """
 _METRICS = {"pld": "PLD (Å)", "lcd": "LCD (Å)", "accessible": "可及分数"}
 
@@ -49,7 +59,10 @@ def _lattice(c: Comparison) -> str:
     strain = "主应变：" + "  ".join(
         f"{e:+.1%}{_direction(*axis)}" for e, axis in zip(s.principal, s.axes, strict=True)
     )
-    note = '<p class="note">B 的晶胞已换到 A 的设定并扣除整体转动。</p>'
+    note = (
+        '<p class="note">B 的晶胞已换到 A 的设定并扣除整体转动。'
+        f"{escape(_matching(c.motion.match, c.name_a, c.name_b))}</p>"
+    )
     return _section(
         "晶格", _table(("参数", "A", "B", "变化"), rows), f"<p>{escape(strain)}</p>", note
     )
@@ -184,8 +197,13 @@ def _comparison(c: Comparison) -> str:
         for x in dict.fromkeys(f.label for f in c.findings)
     )
     findings = _table(("结论", "证据"), [(LABELS[f.label], f.evidence) for f in c.findings])
+    warn = (
+        ""
+        if c.motion.match.reliable
+        else '<p class="warn">原子配对置信度低，以下结论可能不可靠。</p>'
+    )
     return (
-        f"<h2>{escape(c.name_a)} → {escape(c.name_b)}</h2><p>{tags}</p>{findings}"
+        f"<h2>{escape(c.name_a)} → {escape(c.name_b)}</h2>{warn}<p>{tags}</p>{findings}"
         + _lattice(c)
         + _units(c)
         + _internals(c)

@@ -90,7 +90,10 @@ class Comparison:
             f"{self.name_a} → {self.name_b}",
             "结论：" + "、".join(dict.fromkeys(LABELS[f.label] for f in self.findings)),
         ]
+        if not mo.match.reliable:
+            lines.insert(1, "警告：原子配对置信度低，以下结论可能不可靠")
         lines += [f"  · {LABELS[f.label]}：{f.evidence}" for f in self.findings]
+        lines.append(_matching(mo.match, self.name_a, self.name_b))
         lines.append(
             f"晶格：体积 {s.volume:+.1%}，主应变 "
             + " ".join(
@@ -111,6 +114,25 @@ class Comparison:
 
 def _direction(axis: str, angle: float) -> str:
     return f"∥{axis}" if angle < 20 else f"(与 {axis} 成 {angle:.0f}°)"
+
+
+def _cell(h: np.ndarray) -> str:
+    if (h == np.diag(np.diag(h))).all():
+        return "×".join(map(str, np.diag(h)))
+    return " ".join("(" + " ".join(map(str, row)) + ")" for row in h)
+
+
+def _matching(m, name_a: str, name_b: str) -> str:
+    cells = [
+        f"{name}超胞 {_cell(h)}"
+        for name, h in zip((name_a, name_b), m.supercell, strict=True)
+        if not (h == np.eye(3)).all()
+    ]
+    margin = "∞" if np.isinf(m.margin) else f"{m.margin:.2f}"
+    return (
+        f"配对：骨架重原子覆盖 {m.coverage:.0%}，次优配对代价差 {margin} Å/原子，"
+        f"中位位移 {np.median(m.distance):.2f} Å" + ("，" + "，".join(cells) if cells else "")
+    )
 
 
 def _name(unit, units) -> str:
@@ -262,7 +284,7 @@ def _load(state, block, encoding):
         from mofmotion.audit import audit_cif
 
         report = audit_cif(state, block=block, encoding=encoding)
-        if report.structure is None:
+        if not report.ok or report.structure is None:
             raise ValueError(report.summary())
         return report.structure, str(state)
     return state, state.composition.reduced_formula

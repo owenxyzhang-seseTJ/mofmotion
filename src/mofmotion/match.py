@@ -8,7 +8,13 @@ import numpy as np
 from mofmotion.graph import _symbols
 
 CUTOFF = 3.0
+COVERAGE = 0.95
+MARGIN = 0.05
+_KEEP = 6
 _SHIFTS = np.array(list(product((-1, 0, 1), repeat=3)))
+_EYE = np.eye(3, dtype=int)
+_UNIMODULAR = np.array(list(product((-1, 0, 1), repeat=9)), dtype=float).reshape(-1, 3, 3)
+_UNIMODULAR = _UNIMODULAR[np.isclose(np.abs(np.linalg.det(_UNIMODULAR)), 1)]
 
 
 @dataclass
@@ -21,6 +27,9 @@ class Match:
     pairs: np.ndarray
     target: np.ndarray
     distance: np.ndarray
+    supercell: tuple[np.ndarray, np.ndarray]
+    coverage: float
+    margin: float
 
     @property
     def unmatched(self) -> tuple[np.ndarray, np.ndarray]:
@@ -29,25 +38,68 @@ class Match:
             np.setdiff1d(np.arange(len(self.b)), self.pairs[:, 1]),
         )
 
+    @property
+    def reliable(self) -> bool:
+        return self.coverage >= COVERAGE and self.margin >= MARGIN
+
     def positions(self) -> np.ndarray:
         out = np.full((len(self.a), 3), np.nan)
         out[self.pairs[:, 0]] = self.target
         return out
 
 
-def _settings(la: np.ndarray, lb: np.ndarray, keep: int = 6) -> list[np.ndarray]:
+def _niggli(lattice: np.ndarray):
     from pymatgen.core import Lattice
 
-    ra = Lattice(la).get_niggli_reduced_lattice().matrix
-    rb = Lattice(lb).get_niggli_reduced_lattice().matrix
-    pa, pb = np.rint(ra @ np.linalg.inv(la)), np.rint(rb @ np.linalg.inv(lb))
-    ms = np.array(list(product((-1, 0, 1), repeat=9)), dtype=float).reshape(-1, 3, 3)
-    ms = ms[np.isclose(np.linalg.det(ms), np.linalg.det(pa) / np.linalg.det(pb))]
+    reduced = Lattice(lattice).get_niggli_reduced_lattice().matrix
+    return reduced, np.rint(reduced @ np.linalg.inv(lattice))
+
+
+def _settings(la: np.ndarray, lb: np.ndarray):
+    ra, pa = _niggli(la)
+    rb, pb = _niggli(lb)
+    ms = _UNIMODULAR[np.isclose(np.linalg.det(_UNIMODULAR), np.linalg.det(pa) / np.linalg.det(pb))]
     g = np.linalg.inv(ra) @ ms @ rb
     strain = np.linalg.norm(g @ g.transpose(0, 2, 1) - np.eye(3), axis=(1, 2))
-    order = np.argsort(strain)
-    order = order[strain[order] <= strain[order[0]] + 0.05][:keep]
-    return [np.rint(np.linalg.inv(pa) @ ms[k] @ pb).astype(int) for k in order]
+    return strain, np.rint(np.linalg.inv(pa) @ ms @ pb).astype(int)
+
+
+def _supercells(n: int) -> list[np.ndarray]:
+    out = []
+    for p, q in product(range(1, n + 1), repeat=2):
+        if n % (p * q):
+            continue
+        r = n // (p * q)
+        for x, y, z in product(range(q), range(r), range(r)):
+            out.append(np.array([[p, x, y], [0, q, z], [0, 0, r]]))
+    return out
+
+
+def _ratio(sym_a, free_a, sym_b, free_b, keys) -> tuple[int, int]:
+    heavy = [k for k in keys if not k[1] and k[0] != "H"] or keys
+
+    def count(sym, free, key):
+        return np.count_nonzero((sym == key[0]) & (free == key[1]))
+
+    key = min(heavy, key=lambda k: count(sym_a, free_a, k))
+    na, nb = count(sym_a, free_a, key), count(sym_b, free_b, key)
+    if nb % na == 0:
+        return nb // na, 1
+    if na % nb == 0:
+        return 1, na // nb
+    return 1, 1
+
+
+def _groups(sym_a, free_a, sym_b, free_b, heavy_framework: bool):
+    keys = sorted(set(zip(sym_a, free_a, strict=True)) & set(zip(sym_b, free_b, strict=True)))
+    out = []
+    for symbol, free in keys:
+        if heavy_framework and (free or symbol == "H"):
+            continue
+        ia = np.flatnonzero((sym_a == symbol) & (free_a == free))
+        ib = np.flatnonzero((sym_b == symbol) & (free_b == free))
+        out.append((ia, ib))
+    return out
 
 
 def _assign(fa: np.ndarray, fb: np.ndarray, lattice: np.ndarray, cutoff: float):
@@ -90,6 +142,16 @@ def _pairing(fa, fb, lattice, groups, cutoff):
     return cost, np.asarray(a, dtype=int), np.asarray(b, dtype=int), np.asarray(d), t
 
 
+def _same(x: np.ndarray, y: np.ndarray, tol: float = 0.1) -> bool:
+    return len(x) == len(y) and bool(np.allclose(x, y, atol=tol))
+
+
+def _expand(s, free: np.ndarray, h: np.ndarray):
+    if (h == _EYE).all():
+        return s, free
+    return s * h, np.repeat(free, round(abs(np.linalg.det(h))))
+
+
 def match(a, b, *, free_a=None, free_b=None, cutoff: float = CUTOFF) -> Match:
     from pymatgen.core import Lattice, Structure
     from scipy.linalg import polar
@@ -98,40 +160,66 @@ def match(a, b, *, free_a=None, free_b=None, cutoff: float = CUTOFF) -> Match:
     free_a = np.zeros(len(a), bool) if free_a is None else np.asarray(free_a, bool)
     free_b = np.zeros(len(b), bool) if free_b is None else np.asarray(free_b, bool)
     keys = sorted(set(zip(sym_a, free_a, strict=True)) & set(zip(sym_b, free_b, strict=True)))
+    ka, kb = _ratio(sym_a, free_a, sym_b, free_b, keys)
+    if ka > 1:
+        cells = [(h, _EYE) for h in _supercells(ka)]
+    else:
+        cells = [(_EYE, h) for h in _supercells(kb)]
 
-    def groups(heavy_framework: bool):
-        out = []
-        for symbol, free in keys:
-            if heavy_framework and (free or symbol == "H"):
-                continue
-            ia = np.flatnonzero((sym_a == symbol) & (free_a == free))
-            ib = np.flatnonzero((sym_b == symbol) & (free_b == free))
-            out.append((ia, ib))
-        return out
+    options = []
+    for c, (ha, hb) in enumerate(cells):
+        strain, ts = _settings(ha @ a.lattice.matrix, hb @ b.lattice.matrix)
+        options += [(s, c, t) for s, t in zip(strain, ts, strict=True)]
+    options.sort(key=lambda o: o[0])
+    options = [o for o in options if o[0] <= options[0][0] + 0.05][: _KEEP * len(cells)]
 
-    search = groups(True) or groups(False)
-    ia0, ib0 = min(search, key=lambda g: (len(g[0]), -len(g[1])))
-    la, fa = a.lattice.matrix, a.frac_coords
-    best = None
-    for t in _settings(la, b.lattice.matrix):
-        fb = b.frac_coords @ np.linalg.inv(t)
+    built, trials = {}, []
+    for _, c, t in options:
+        if c not in built:
+            sa, fra = _expand(a, free_a, cells[c][0])
+            sb, frb = _expand(b, free_b, cells[c][1])
+            sya, syb = np.array(_symbols(sa)), np.array(_symbols(sb))
+            search = _groups(sya, fra, syb, frb, True) or _groups(sya, fra, syb, frb, False)
+            built[c] = (sa, sb, fra, frb, sya, syb, search)
+        sa, sb, *_, search = built[c]
+        ia0, ib0 = min(search, key=lambda g: (len(g[0]), -len(g[1])))
+        la, fa = sa.lattice.matrix, sa.frac_coords
+        fb = sb.frac_coords @ np.linalg.inv(t)
         for origin in fa[ia0[0]] - fb[ib0]:
-            cost, pa, _, _, target = _pairing(fa, fb + origin, la, search, cutoff)
-            if best is None or cost < best[0] - 1e-9:
-                drift = (target - fa[pa]).mean(axis=0) if len(pa) else 0
-                best = (cost, t, fb, origin - drift)
-    _, t, fb, origin = best
-    fb = fb + origin
-    _, pa, pb, d, target = _pairing(fa, fb, la, groups(False), cutoff)
+            cost, pa, _, d, target = _pairing(fa, fb + origin, la, search, cutoff)
+            drift = (target - fa[pa]).mean(axis=0) if len(pa) else 0
+            trials.append((cost, c, t, fb, origin - drift, np.sort(d)))
 
-    rotation, stretch = polar(np.linalg.inv(la) @ t @ b.lattice.matrix, side="left")
+    cost, c, t, fb, origin, sig = min(trials, key=lambda x: x[0])
+    rivals = [x[0] for x in trials if not _same(x[5], sig)]
+    margin = (min(rivals) - cost) / max(len(sig), 1) if rivals else np.inf
+
+    sa, sb, fra, frb, sya, syb, _ = built[c]
+    la, fa = sa.lattice.matrix, sa.frac_coords
+    fb = fb + origin
+    _, pa, pb, d, target = _pairing(fa, fb, la, _groups(sya, fra, syb, frb, False), cutoff)
+    bound = sum(min(len(ia), len(ib)) for ia, ib in _groups(sya, fra, syb, frb, True))
+    matched = np.count_nonzero(~fra[pa] & (sya[pa] != "H"))
+    coverage = matched / bound if bound else 0.0
+
+    rotation, stretch = polar(np.linalg.inv(la) @ t @ sb.lattice.matrix, side="left")
     mapped = Structure(
         Lattice(la @ stretch),
-        [site.species for site in b],
+        [site.species for site in sb],
         fb % 1,
-        labels=[site.label for site in b],
+        labels=[site.label for site in sb],
     )
     order = np.argsort(pa)
     return Match(
-        a, mapped, t, rotation, stretch, np.stack([pa, pb], 1)[order], target[order], d[order]
+        sa,
+        mapped,
+        t,
+        rotation,
+        stretch,
+        np.stack([pa, pb], 1)[order],
+        target[order],
+        d[order],
+        cells[c],
+        coverage,
+        margin,
     )

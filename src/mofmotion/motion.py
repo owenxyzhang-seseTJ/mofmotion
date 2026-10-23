@@ -305,7 +305,11 @@ def motion(a, b, *, cutoff: float = CUTOFF) -> Motion:
         return np.array([units.units[u].kind == "free" for u in units.unit_of])
 
     m = match(a, b, free_a=free(ua), free_b=free(ub), cutoff=cutoff)
-    heavy = np.array([s != "H" for s in _symbols(a)])
+    if len(m.a) != len(a):
+        ua = structural_units(bond_graph(m.a))
+    if len(m.b) != len(b):
+        ub = structural_units(bond_graph(m.b))
+    heavy = np.array([s != "H" for s in _symbols(m.a)])
     units, nets = _unit_motions(m, ua, heavy)
     changes, coordination = _bond_changes(m, ua)
     return Motion(
