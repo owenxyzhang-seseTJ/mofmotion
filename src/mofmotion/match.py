@@ -172,9 +172,8 @@ def match(a, b, *, free_a=None, free_b=None, cutoff: float = CUTOFF) -> Match:
     options = []
     for c, (ha, hb) in enumerate(cells):
         strain, ts = _settings(ha @ a.lattice.matrix, hb @ b.lattice.matrix)
-        options += [(s, c, t) for s, t in zip(strain, ts, strict=True)]
-    options.sort(key=lambda o: o[0])
-    options = [o for o in options if o[0] <= options[0][0] + 0.05][: _KEEP * len(cells)]
+        keep = np.argsort(strain)[:_KEEP]
+        options += [(strain[k], c, ts[k]) for k in keep]
 
     built, trials = {}, []
     for _, c, t in options:
